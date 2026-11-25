@@ -196,3 +196,7 @@ type Library = {
 	toggle: (self: Library) -> (),
 	Notify: (self: Library, data: NotifyOptions?) -> ()
 }
+
+type Venyx = {
+	new: (data: WindowOptions?) -> Library
+}
