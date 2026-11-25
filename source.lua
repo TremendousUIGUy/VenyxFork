@@ -1,17 +1,22 @@
--- init
-local player = game.Players.LocalPlayer
-local mouse = player:GetMouse()
+--!nocheck
+--!nolint
+const cloneref = cloneref or function(i) return i end
+const Players = cloneref(game:GetService("Players")) :: Players
+const UserInputService = cloneref(game:GetService("UserInputService")) :: UserInputService
+const RunService = cloneref(game:GetService("RunService")) :: RunService
+const TweenService = cloneref(game:GetService("TweenService")) :: TweenService
+const TextService = cloneref(game:GetService("TextService")) :: TextService
+const CoreGui = cloneref(game:GetService("CoreGui")) :: CoreGui
 
--- services
-local input = game:GetService("UserInputService")
-local run = game:GetService("RunService")
-local tween = game:GetService("TweenService")
-local tweeninfo = TweenInfo.new
+const player = Players.LocalPlayer
+const mouse = player:GetMouse()
+const tweenInfo = TweenInfo.new
+const unknownKey = Enum.KeyCode:FromValue(0)
+const gothamSemibold = Font.fromName("GothamSSm", Enum.FontWeight.SemiBold)
 
--- additional
 local utility = {}
+local lastNotification: UDim2? = nil
 
--- themes
 local objects = {}
 local themes = {
 	Background = Color3.fromRGB(24, 24, 24),
@@ -22,26 +27,58 @@ local themes = {
 	TextColor = Color3.fromRGB(255, 255, 255)
 }
 
+const mouseButtons = {
+	[Enum.UserInputType.MouseButton1] = true,
+	[Enum.UserInputType.MouseButton2] = true,
+	[Enum.UserInputType.MouseButton3] = true
+}
+
+local function safeCall(callback, ...)
+	local success, result = pcall(callback, ...)
+
+	if not success then
+		warn("[Venyx] callback error: " .. tostring(result))
+	end
+
+	return success, result
+end
+
+local function applyOptions(options, dataOptions)
+	for i, v in dataOptions or {} do
+		if i ~= "Update" and options[i] ~= nil then
+			options[i] = if type(options[i]) == "string" then tostring(v) else v
+		end
+	end
+end
+
+local function keyName(key)
+	if key.EnumType == Enum.KeyCode then
+		return UserInputService:GetStringForKeyCode(key)
+	end
+
+	return key.Name
+end
+
 do
 	function utility:Create(instance, properties, children)
 		local object = Instance.new(instance)
 
-		for i, v in pairs(properties or {}) do
+		for i, v in properties or {} do
 			object[i] = v
 
-			if typeof(v) == "Color3" then -- save for theme changer later
+			if typeof(v) == "Color3" then
 				local theme = utility:Find(themes, v)
 
 				if theme then
 					objects[theme] = objects[theme] or {}
-					objects[theme][i] = objects[theme][i] or setmetatable({}, {_mode = "k"})
+					objects[theme][i] = objects[theme][i] or {}
 
-					table.insert(objects[theme][i], object)
+					objects[theme][i][#objects[theme][i] + 1] = object
 				end
 			end
 		end
 
-		for i, module in pairs(children or {}) do
+		for i, module in children or {} do
 			module.Parent = object
 		end
 
@@ -49,20 +86,22 @@ do
 	end
 
 	function utility:Tween(instance, properties, duration, ...)
-		tween:Create(instance, tweeninfo(duration, ...), properties):Play()
+		TweenService:Create(instance, tweenInfo(duration, ...), properties):Play()
 	end
 
 	function utility:Wait()
-		run.RenderStepped:Wait()
+		RunService.RenderStepped:Wait()
 		return true
 	end
 
-	function utility:Find(table, value) -- table.find doesn't work for dictionaries
-		for i, v in  pairs(table) do
+	function utility:Find(list, value)
+		for i, v in list do
 			if v == value then
 				return i
 			end
 		end
+
+		return nil
 	end
 
 	function utility:Sort(pattern, values)
@@ -73,9 +112,9 @@ do
 			return values
 		end
 
-		for i, value in pairs(values) do
+		for i, value in values do
 			if tostring(value):lower():find(pattern) then
-				table.insert(new, value)
+				new[#new + 1] = value
 			end
 		end
 
@@ -95,12 +134,10 @@ do
 		object.ImageTransparency = 1
 		utility:Tween(clone, {Size = object.Size}, 0.2)
 
-		coroutine.wrap(function()
-			wait(0.2)
-
+		task.delay(0.2, function()
 			object.ImageTransparency = 0
 			clone:Destroy()
-		end)()
+		end)
 
 		return clone
 	end
@@ -109,57 +146,64 @@ do
 		self.keybinds = {}
 		self.ended = {}
 
-		input.InputBegan:Connect(function(key)
-			if self.keybinds[key.KeyCode] then
-				for i, bind in pairs(self.keybinds[key.KeyCode]) do
-					bind()
+		UserInputService.InputBegan:Connect(function(key, gameProcessedEvent)
+			local binds = self.keybinds[key.KeyCode]
+
+			if key.KeyCode == unknownKey then
+				binds = self.keybinds[key.UserInputType]
+			end
+
+			if binds then
+				for i, bind in binds do
+					if bind.gameProcessedEvent == gameProcessedEvent then
+						safeCall(bind.callback)
+					end
 				end
 			end
 		end)
 
-		input.InputEnded:Connect(function(key)
+		UserInputService.InputEnded:Connect(function(key)
 			if key.UserInputType == Enum.UserInputType.MouseButton1 then
-				for i, callback in pairs(self.ended) do
-					callback()
+				for i, callback in self.ended do
+					safeCall(callback)
 				end
 			end
 		end)
 	end
 
-	function utility:BindToKey(key, callback)
-
+	function utility:BindToKey(key, callback, gameProcessedEvent)
 		self.keybinds[key] = self.keybinds[key] or {}
 
-		table.insert(self.keybinds[key], callback)
+		table.insert(self.keybinds[key], {callback = callback, gameProcessedEvent = gameProcessedEvent or false})
 
 		return {
 			UnBind = function()
-				for i, bind in pairs(self.keybinds[key]) do
-					if bind == callback then
-						table.remove(self.keybinds[key], i)
+				const binds = self.keybinds[key]
+
+				for i = #binds, 1, -1 do
+					if binds[i].callback == callback then
+						table.remove(binds, i)
 					end
 				end
 			end
 		}
 	end
 
-	function utility:KeyPressed() -- yield until next key is pressed
-		local key = input.InputBegan:Wait()
+	function utility:KeyPressed()
+		local key = UserInputService.InputBegan:Wait()
 
-		while key.UserInputType ~= Enum.UserInputType.Keyboard	 do
-			key = input.InputBegan:Wait()
+		while key.UserInputType ~= Enum.UserInputType.Keyboard and not mouseButtons[key.UserInputType] do
+			key = UserInputService.InputBegan:Wait()
 		end
 
-		wait() -- overlapping connection
+		task.wait()
 
 		return key
 	end
 
 	function utility:DraggingEnabled(frame, parent)
-
 		parent = parent or frame
 
-		-- stolen from wally or kiriot, kek
 		local dragging = false
 		local dragInput, mousePos, framePos
 
@@ -183,24 +227,20 @@ do
 			end
 		end)
 
-		input.InputChanged:Connect(function(input)
+		UserInputService.InputChanged:Connect(function(input)
 			if input == dragInput and dragging then
 				local delta = input.Position - mousePos
-				parent.Position  = UDim2.new(framePos.X.Scale, framePos.X.Offset + delta.X, framePos.Y.Scale, framePos.Y.Offset + delta.Y)
+				parent.Position = UDim2.new(framePos.X.Scale, framePos.X.Offset + delta.X, framePos.Y.Scale, framePos.Y.Offset + delta.Y)
 			end
 		end)
-
 	end
 
 	function utility:DraggingEnded(callback)
-		table.insert(self.ended, callback)
+		self.ended[#self.ended + 1] = callback
 	end
-
 end
 
--- classes
-
-local library = {} -- main
+local library = {}
 local page = {}
 local section = {}
 
@@ -209,12 +249,13 @@ do
 	page.__index = page
 	section.__index = section
 
-	-- new classes
+	function library.new(data)
+		data = data or {}
+		local title = data.title or "Venyx"
 
-	function library.new(title)
 		local container = utility:Create("ScreenGui", {
 			Name = title,
-			Parent = game.CoreGui
+			Parent = CoreGui or player:FindFirstChildOfClass("PlayerGui")
 		}, {
 			utility:Create("ImageLabel", {
 				Name = "Main",
@@ -275,7 +316,7 @@ do
 					ScaleType = Enum.ScaleType.Slice,
 					SliceCenter = Rect.new(4, 4, 296, 296)
 				}, {
-					utility:Create("TextLabel", { -- title
+					utility:Create("TextLabel", {
 						Name = "Title",
 						AnchorPoint = Vector2.new(0, 0.5),
 						BackgroundTransparency = 1,
@@ -300,6 +341,12 @@ do
 			pagesContainer = container.Main.Pages.Pages_Container,
 			pages = {}
 		}, library)
+	end
+
+	function library.setTitle(library, title)
+		local container = library.container
+		container.Name = title
+		container.Main.TopBar.Title.Text = title
 	end
 
 	function page.new(library, title, icon)
@@ -336,7 +383,7 @@ do
 				Position = UDim2.new(0, 12, 0.5, 0),
 				Size = UDim2.new(0, 16, 0, 16),
 				ZIndex = 3,
-				Image = "rbxassetid://" .. tostring(icon),
+				Image = "http://www.roblox.com/asset/?id=" .. tostring(icon),
 				ImageColor3 = themes.TextColor,
 				ImageTransparency = 0.64
 			}) or {}
@@ -395,7 +442,7 @@ do
 					BackgroundTransparency = 1,
 					Size = UDim2.new(1, 0, 0, 20),
 					ZIndex = 2,
-					Font = Enum.Font.GothamSemibold,
+					FontFace = gothamSemibold,
 					Text = title,
 					TextColor3 = themes.TextColor,
 					TextSize = 12,
@@ -419,37 +466,79 @@ do
 		}, section)
 	end
 
-	function library:addPage(...)
+	function library:addPage(data)
+		data = data or {}
+		local title = data.title or "Page"
+		local icon = data.icon
 
-		local page = page.new(self, ...)
-		local button = page.button
+		local newPage = page.new(self, title, icon)
+		local button = newPage.button
 
-		table.insert(self.pages, page)
+		table.insert(self.pages, newPage)
+		self:reorderPageButtons()
 
 		button.MouseButton1Click:Connect(function()
-			self:SelectPage(page, true)
+			self:SelectPage({
+				page = newPage,
+				toggle = true
+			})
 		end)
 
-		return page
+		return newPage
 	end
 
-	function page:addSection(...)
-		local section = section.new(self, ...)
+	function page:setOrderPos(newPos)
+		local libraryPages = self.library.pages
 
-		table.insert(self.sections, section)
+		if newPos > #libraryPages then
+			error("newPos exceeds number of pages available")
+		end
 
-		return section
+		local foundIndex = table.find(libraryPages, self)
+
+		if foundIndex then
+			table.remove(libraryPages, foundIndex)
+		end
+
+		table.insert(libraryPages, newPos, self)
+
+		self.library:reorderPageButtons()
 	end
 
-	-- functions
+	function page:addSection(data)
+		data = data or {}
+		local title = data.title or "Section"
 
-	function library:setTheme(theme, color3)
+		local newSection = section.new(self, title)
+
+		self.sections[#self.sections + 1] = newSection
+
+		return newSection
+	end
+
+	function library:reorderPageButtons()
+		for i, page in self.pages do
+			page.button.LayoutOrder = i
+		end
+	end
+
+	function library:setTheme(data)
+		data = data or {}
+
+		local theme = data.theme
+		local color3 = data.color3
+
+		if themes[theme] == nil or typeof(color3) ~= "Color3" then
+			warn("[Venyx] setTheme needs an existing theme name and a Color3")
+			return
+		end
+
 		themes[theme] = color3
 
-		for property, objects in pairs(objects[theme]) do
-			for i, object in pairs(objects) do
+		for property, themedObjects in objects[theme] or {} do
+			for i, object in themedObjects do
 				if not object.Parent or (object.Name == "Button" and object.Parent.Name == "ColorPicker") then
-					objects[i] = nil -- i can do this because weak tables :D
+					themedObjects[i] = nil
 				else
 					object[property] = color3
 				end
@@ -458,7 +547,6 @@ do
 	end
 
 	function library:toggle()
-
 		if self.toggling then
 			return
 		end
@@ -473,10 +561,10 @@ do
 				Size = UDim2.new(0, 511, 0, 428),
 				Position = self.position
 			}, 0.2)
-			wait(0.2)
+			task.wait(0.2)
 
 			utility:Tween(topbar, {Size = UDim2.new(1, 0, 0, 38)}, 0.2)
-			wait(0.2)
+			task.wait(0.2)
 
 			container.ClipsDescendants = false
 			self.position = nil
@@ -485,28 +573,28 @@ do
 			container.ClipsDescendants = true
 
 			utility:Tween(topbar, {Size = UDim2.new(1, 0, 1, 0)}, 0.2)
-			wait(0.2)
+			task.wait(0.2)
 
 			utility:Tween(container, {
 				Size = UDim2.new(0, 511, 0, 0),
 				Position = self.position + UDim2.new(0, 0, 0, 428)
 			}, 0.2)
-			wait(0.2)
+			task.wait(0.2)
 		end
 
 		self.toggling = false
 	end
 
-	-- new modules
+	function library:Notify(data)
+		data = data or {}
+		local title = data.title or "Notification"
+		local text = data.text or "nil text"
+		local callback = data.callback or function() end
 
-	function library:Notify(title, text, callback)
-
-		-- overwrite last notification
 		if self.activeNotification then
 			self.activeNotification = self.activeNotification()
 		end
 
-		-- standard create
 		local notification = utility:Create("ImageLabel", {
 			Name = "Notification",
 			Parent = self.container,
@@ -544,9 +632,9 @@ do
 				Position = UDim2.new(0, 10, 0, 8),
 				Size = UDim2.new(1, -40, 0, 16),
 				ZIndex = 4,
-				Font = Enum.Font.GothamSemibold,
+				FontFace = gothamSemibold,
 				TextColor3 = themes.TextColor,
-				TextSize = 14.000,
+				TextSize = 14,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("TextLabel", {
@@ -557,7 +645,7 @@ do
 				ZIndex = 4,
 				Font = Enum.Font.Gotham,
 				TextColor3 = themes.TextColor,
-				TextSize = 12.000,
+				TextSize = 12,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("ImageButton", {
@@ -580,24 +668,19 @@ do
 			})
 		})
 
-		-- dragging
 		utility:DraggingEnabled(notification)
-
-		-- position and size
-		title = title or "Notification"
-		text = text or ""
 
 		notification.Title.Text = title
 		notification.Text.Text = text
 
-		local padding = 10
-		local textSize = game:GetService("TextService"):GetTextSize(text, 12, Enum.Font.Gotham, Vector2.new(math.huge, 16))
+		const padding = 10
+		local textSize = TextService:GetTextSize(text, 12, Enum.Font.Gotham, Vector2.new(math.huge, 16))
 
-		notification.Position = library.lastNotification or UDim2.new(0, padding, 1, -(notification.AbsoluteSize.Y + padding))
+		notification.Position = lastNotification or UDim2.new(0, padding, 1, -(notification.AbsoluteSize.Y + padding))
 		notification.Size = UDim2.new(0, 0, 0, 60)
 
 		utility:Tween(notification, {Size = UDim2.new(0, textSize.X + 70, 0, 60)}, 0.2)
-		wait(0.2)
+		task.wait(0.2)
 
 		notification.ClipsDescendants = false
 		utility:Tween(notification.Flash, {
@@ -605,10 +688,8 @@ do
 			Position = UDim2.new(1, 0, 0, 0)
 		}, 0.2)
 
-		-- callbacks
 		local active = true
 		local close = function()
-
 			if not active then
 				return
 			end
@@ -616,50 +697,53 @@ do
 			active = false
 			notification.ClipsDescendants = true
 
-			library.lastNotification = notification.Position
+			lastNotification = notification.Position
 			notification.Flash.Position = UDim2.new(0, 0, 0, 0)
 			utility:Tween(notification.Flash, {Size = UDim2.new(1, 0, 1, 0)}, 0.2)
 
-			wait(0.2)
+			task.wait(0.2)
 			utility:Tween(notification, {
 				Size = UDim2.new(0, 0, 0, 60),
 				Position = notification.Position + UDim2.new(0, textSize.X + 70, 0, 0)
 			}, 0.2)
 
-			wait(0.2)
+			task.wait(0.2)
 			notification:Destroy()
 		end
 
 		self.activeNotification = close
 
 		notification.Accept.MouseButton1Click:Connect(function()
-
 			if not active then
 				return
 			end
 
 			if callback then
-				callback(true)
+				safeCall(callback, true)
 			end
 
 			close()
 		end)
 
 		notification.Decline.MouseButton1Click:Connect(function()
-
 			if not active then
 				return
 			end
 
 			if callback then
-				callback(false)
+				safeCall(callback, false)
 			end
 
 			close()
 		end)
 	end
 
-	function section:addButton(title, callback)
+	function section:addButton(data)
+		data = data or {}
+		local this = {}
+		this.title = data.title or "nil text"
+		this.callback = data.callback or function() end
+
 		local button = utility:Create("ImageButton", {
 			Name = "Button",
 			Parent = self.container,
@@ -678,48 +762,54 @@ do
 				Size = UDim2.new(1, 0, 1, 0),
 				ZIndex = 3,
 				Font = Enum.Font.Gotham,
-				Text = title,
+				Text = this.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
-				TextTransparency = 0.10000000149012
+				TextTransparency = 0.1
 			})
 		})
 
-		table.insert(self.modules, button)
-		--self:Resize()
+		local module = {Instance = button, Options = this}
+		self.modules[#self.modules + 1] = module
 
 		local text = button.Title
 		local debounce
 
 		button.MouseButton1Click:Connect(function()
-
 			if debounce then
 				return
 			end
 
-			-- animation
 			utility:Pop(button, 10)
 
 			debounce = true
 			text.TextSize = 0
 			utility:Tween(button.Title, {TextSize = 14}, 0.2)
 
-			wait(0.2)
+			task.wait(0.2)
 			utility:Tween(button.Title, {TextSize = 12}, 0.2)
 
-			if callback then
-				callback(function(...)
-					self:updateButton(button, ...)
-				end)
-			end
+			safeCall(this.callback)
 
 			debounce = false
 		end)
 
-		return button
+		function this:Update(dataOptions)
+			applyOptions(module.Options, dataOptions)
+
+			return section:updateButton(module)
+		end
+
+		return module
 	end
 
-	function section:addToggle(title, default, callback)
+	function section:addToggle(data)
+		data = data or {}
+		local this = {}
+		this.title = data.title or "nil text"
+		this.toggled = data.default or false
+		this.callback = data.callback or function() end
+
 		local toggle = utility:Create("ImageButton", {
 			Name = "Toggle",
 			Parent = self.container,
@@ -731,7 +821,7 @@ do
 			ImageColor3 = themes.DarkContrast,
 			ScaleType = Enum.ScaleType.Slice,
 			SliceCenter = Rect.new(2, 2, 298, 298)
-		},{
+		}, {
 			utility:Create("TextLabel", {
 				Name = "Title",
 				AnchorPoint = Vector2.new(0, 0.5),
@@ -740,10 +830,10 @@ do
 				Size = UDim2.new(0.5, 0, 1, 0),
 				ZIndex = 3,
 				Font = Enum.Font.Gotham,
-				Text = title,
+				Text = this.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
-				TextTransparency = 0.10000000149012,
+				TextTransparency = 0.1,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("ImageLabel", {
@@ -772,50 +862,34 @@ do
 			})
 		})
 
-		table.insert(self.modules, toggle)
-		--self:Resize()
+		local module = {Instance = toggle, Options = this}
+		self.modules[#self.modules + 1] = module
 
-		local active = default
-		local this = {}
-		self:updateToggle(toggle, nil, active)
+		self:updateToggle(module)
 
-		function this:Get()
-			return active
-		end
+		function this:Update(dataOptions)
+			applyOptions(module.Options, dataOptions)
 
-		function this:updateToggle(title, value)
-			return self:updateToggle(toggle, title, value)
-		end
-
-		this.Set = function(val)
-			active = val
-
-			if callback then
-				callback(active, function(...)
-					self:updateToggle(toggle, ...)
-				end)
-			end
+			return section:updateToggle(module)
 		end
 
 		toggle.MouseButton1Click:Connect(function()
-			active = not active
-			self:updateToggle(toggle, nil, active)
+			this.toggled = not this.toggled
+			self:updateToggle(module)
 
-			if callback then
-				callback(active, function(...)
-					self:updateToggle(toggle, ...)
-				end)
-			end
+			safeCall(this.callback, this.toggled)
 		end)
 
-		return setmetatable({}, {
-			__index = function(_, k)
-				return this[k] or toggle[k]
-			end
-		})
+		return module
 	end
 
-	function section:addTextbox(title, default, callback)
+	function section:addTextbox(data)
+		data = data or {}
+		local this = {}
+		this.title = data.title or "nil text"
+		this.callback = data.callback or function() end
+		this.default = data.default or "nil text"
+
 		local textbox = utility:Create("ImageButton", {
 			Name = "Textbox",
 			Parent = self.container,
@@ -836,10 +910,10 @@ do
 				Size = UDim2.new(0.5, 0, 1, 0),
 				ZIndex = 3,
 				Font = Enum.Font.Gotham,
-				Text = title,
+				Text = this.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
-				TextTransparency = 0.10000000149012,
+				TextTransparency = 0.1,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("ImageLabel", {
@@ -860,22 +934,21 @@ do
 					Position = UDim2.new(0, 5, 0, 0),
 					Size = UDim2.new(1, -10, 1, 0),
 					ZIndex = 3,
-					Font = Enum.Font.GothamSemibold,
-					Text = default or "",
+					FontFace = gothamSemibold,
+					Text = this.default,
 					TextColor3 = themes.TextColor,
 					TextSize = 11
 				})
 			})
 		})
 
-		table.insert(self.modules, textbox)
-		--self:Resize()
+		local module = {Instance = textbox, Options = this}
+		self.modules[#self.modules + 1] = module
 
 		local button = textbox.Button
-		local input = button.Textbox
+		local tInput = button.Textbox
 
 		textbox.MouseButton1Click:Connect(function()
-
 			if textbox.Button.Size ~= UDim2.new(0, 100, 0, 16) then
 				return
 			end
@@ -885,45 +958,49 @@ do
 				Position = UDim2.new(1, -210, 0.5, -8)
 			}, 0.2)
 
-			wait()
+			task.wait()
 
-			input.TextXAlignment = Enum.TextXAlignment.Left
-			input:CaptureFocus()
+			tInput.TextXAlignment = Enum.TextXAlignment.Left
+			tInput:CaptureFocus()
 		end)
 
-		input:GetPropertyChangedSignal("Text"):Connect(function()
-
-			if button.ImageTransparency == 0 and (button.Size == UDim2.new(0, 200, 0, 16) or button.Size == UDim2.new(0, 100, 0, 16)) then -- i know, i dont like this either
+		tInput:GetPropertyChangedSignal("Text"):Connect(function()
+			if button.ImageTransparency == 0 and (button.Size == UDim2.new(0, 200, 0, 16) or button.Size == UDim2.new(0, 100, 0, 16)) then
 				utility:Pop(button, 10)
 			end
 
-			if callback then
-				callback(input.Text, nil, function(...)
-					self:updateTextbox(textbox, ...)
-				end)
-			end
+			safeCall(this.callback, tInput.Text)
 		end)
 
-		input.FocusLost:Connect(function()
-
-			input.TextXAlignment = Enum.TextXAlignment.Center
+		tInput.FocusLost:Connect(function()
+			tInput.TextXAlignment = Enum.TextXAlignment.Center
 
 			utility:Tween(textbox.Button, {
 				Size = UDim2.new(0, 100, 0, 16),
 				Position = UDim2.new(1, -110, 0.5, -8)
 			}, 0.2)
 
-			if callback then
-				callback(input.Text, true, function(...)
-					self:updateTextbox(textbox, ...)
-				end)
-			end
+			safeCall(this.callback, tInput.Text, true)
 		end)
 
-		return textbox
+		function this:Update(dataOptions)
+			applyOptions(module.Options, dataOptions)
+
+			return section:updateTextbox(module)
+		end
+
+		return module
 	end
 
-	function section:addKeybind(title, default, callback, changedCallback)
+	function section:addKeybind(data)
+		data = data or {}
+		local this = {}
+		this.title = data.title or "nil text"
+		this.key = data.key or unknownKey
+		this.gameProcessedEvent = data.gameProcessedEvent or false
+		this.callback = data.callback or function() end
+		this.changedCallback = data.changedCallback or function(key) end
+
 		local keybind = utility:Create("ImageButton", {
 			Name = "Keybind",
 			Parent = self.container,
@@ -944,10 +1021,10 @@ do
 				Size = UDim2.new(1, 0, 1, 0),
 				ZIndex = 3,
 				Font = Enum.Font.Gotham,
-				Text = title,
+				Text = this.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
-				TextTransparency = 0.10000000149012,
+				TextTransparency = 0.1,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("ImageLabel", {
@@ -967,16 +1044,16 @@ do
 					ClipsDescendants = true,
 					Size = UDim2.new(1, 0, 1, 0),
 					ZIndex = 3,
-					Font = Enum.Font.GothamSemibold,
-					Text = default and default.Name or "None",
+					FontFace = gothamSemibold,
+					Text = keyName(this.key),
 					TextColor3 = themes.TextColor,
 					TextSize = 11
 				})
 			})
 		})
 
-		table.insert(self.modules, keybind)
-		--self:Resize()
+		local module = {Instance = keybind, Options = this}
+		self.modules[#self.modules + 1] = module
 
 		local text = keybind.Button.Text
 		local button = keybind.Button
@@ -989,46 +1066,50 @@ do
 
 		self.binds[keybind] = {callback = function()
 			animate()
-
-			if callback then
-				callback(function(...)
-					self:updateKeybind(keybind, ...)
-				end)
-			end
+			safeCall(this.callback)
 		end}
 
-		if default and callback then
-			self:updateKeybind(keybind, nil, default)
-		end
+		self:updateKeybind(module)
 
 		keybind.MouseButton1Click:Connect(function()
-
 			animate()
 
-			if self.binds[keybind].connection then -- unbind
-				return self:updateKeybind(keybind)
+			if self.binds[keybind].connection then
+				this.key = unknownKey
+				self:updateKeybind(module)
+				return
 			end
 
-			if text.Text == "None" then -- new bind
+			if text.Text == "Unknown" then
 				text.Text = "..."
 
-				local key = utility:KeyPressed()
+				local pressed = utility:KeyPressed()
 
-				self:updateKeybind(keybind, nil, key.KeyCode)
+				this.key = if pressed.UserInputType == Enum.UserInputType.Keyboard then pressed.KeyCode else pressed.UserInputType
+
+				self:updateKeybind(module)
 				animate()
 
-				if changedCallback then
-					changedCallback(key, function(...)
-						self:updateKeybind(keybind, ...)
-					end)
-				end
+				safeCall(this.changedCallback, this.key)
 			end
 		end)
 
-		return keybind
+		function this:Update(dataOptions)
+			applyOptions(module.Options, dataOptions)
+
+			return section:updateKeybind(module)
+		end
+
+		return module
 	end
 
-	function section:addColorPicker(title, default, callback)
+	function section:addColorPicker(data)
+		data = data or {}
+		local this = {}
+		this.title = data.title
+		this.default = data.default or Color3.fromRGB(255, 150, 150)
+		this.callback = data.callback or function() end
+
 		local colorpicker = utility:Create("ImageButton", {
 			Name = "ColorPicker",
 			Parent = self.container,
@@ -1040,7 +1121,7 @@ do
 			ImageColor3 = themes.DarkContrast,
 			ScaleType = Enum.ScaleType.Slice,
 			SliceCenter = Rect.new(2, 2, 298, 298)
-		},{
+		}, {
 			utility:Create("TextLabel", {
 				Name = "Title",
 				AnchorPoint = Vector2.new(0, 0.5),
@@ -1049,10 +1130,10 @@ do
 				Size = UDim2.new(0.5, 0, 1, 0),
 				ZIndex = 3,
 				Font = Enum.Font.Gotham,
-				Text = title,
+				Text = this.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
-				TextTransparency = 0.10000000149012,
+				TextTransparency = 0.1,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("ImageButton", {
@@ -1073,7 +1154,7 @@ do
 			Name = "ColorPicker",
 			Parent = self.page.library.container,
 			BackgroundTransparency = 1,
-			Position = UDim2.new(0.75, 0, 0.400000006, 0),
+			Position = UDim2.new(0.75, 0, 0.4, 0),
 			Selectable = true,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Size = UDim2.new(0, 162, 0, 169),
@@ -1100,8 +1181,8 @@ do
 				Position = UDim2.new(0, 10, 0, 8),
 				Size = UDim2.new(1, -40, 0, 16),
 				ZIndex = 2,
-				Font = Enum.Font.GothamSemibold,
-				Text = title,
+				FontFace = gothamSemibold,
+				Text = this.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 14,
 				TextXAlignment = Enum.TextXAlignment.Left
@@ -1154,7 +1235,7 @@ do
 						Name = "Cursor",
 						BackgroundColor3 = themes.TextColor,
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundTransparency = 1.000,
+						BackgroundTransparency = 1,
 						Size = UDim2.new(0, 10, 0, 10),
 						Position = UDim2.new(0, 0, 0, 0),
 						Image = "rbxassetid://5100115962",
@@ -1182,15 +1263,15 @@ do
 						Size = UDim2.new(0, 2, 1, 0),
 						ZIndex = 2
 					}),
-					utility:Create("UIGradient", { -- rainbow canvas
+					utility:Create("UIGradient", {
 						Color = ColorSequence.new({
-							ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 0, 0)),
+							ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
 							ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
 							ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
-							ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0, 255, 255)),
+							ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 255, 255)),
 							ColorSequenceKeypoint.new(0.66, Color3.fromRGB(0, 0, 255)),
 							ColorSequenceKeypoint.new(0.82, Color3.fromRGB(255, 0, 255)),
-							ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 0, 0))
+							ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
 						})
 					})
 				}),
@@ -1219,24 +1300,24 @@ do
 						utility:Create("TextLabel", {
 							Name = "Text",
 							BackgroundTransparency = 1,
-							Size = UDim2.new(0.400000006, 0, 1, 0),
+							Size = UDim2.new(0.4, 0, 1, 0),
 							ZIndex = 2,
 							Font = Enum.Font.Gotham,
 							Text = "R:",
 							TextColor3 = themes.TextColor,
-							TextSize = 10.000
+							TextSize = 10
 						}),
 						utility:Create("TextBox", {
 							Name = "Textbox",
 							BackgroundTransparency = 1,
-							Position = UDim2.new(0.300000012, 0, 0, 0),
-							Size = UDim2.new(0.600000024, 0, 1, 0),
+							Position = UDim2.new(0.3, 0, 0, 0),
+							Size = UDim2.new(0.6, 0, 1, 0),
 							ZIndex = 2,
 							Font = Enum.Font.Gotham,
 							PlaceholderColor3 = themes.DarkContrast,
 							Text = "255",
 							TextColor3 = themes.TextColor,
-							TextSize = 10.000
+							TextSize = 10
 						})
 					}),
 					utility:Create("ImageLabel", {
@@ -1254,22 +1335,22 @@ do
 							Name = "Text",
 							BackgroundTransparency = 1,
 							ZIndex = 2,
-							Size = UDim2.new(0.400000006, 0, 1, 0),
+							Size = UDim2.new(0.4, 0, 1, 0),
 							Font = Enum.Font.Gotham,
 							Text = "G:",
 							TextColor3 = themes.TextColor,
-							TextSize = 10.000
+							TextSize = 10
 						}),
 						utility:Create("TextBox", {
 							Name = "Textbox",
 							BackgroundTransparency = 1,
-							Position = UDim2.new(0.300000012, 0, 0, 0),
-							Size = UDim2.new(0.600000024, 0, 1, 0),
+							Position = UDim2.new(0.3, 0, 0, 0),
+							Size = UDim2.new(0.6, 0, 1, 0),
 							ZIndex = 2,
 							Font = Enum.Font.Gotham,
 							Text = "255",
 							TextColor3 = themes.TextColor,
-							TextSize = 10.000
+							TextSize = 10
 						})
 					}),
 					utility:Create("ImageLabel", {
@@ -1286,23 +1367,23 @@ do
 						utility:Create("TextLabel", {
 							Name = "Text",
 							BackgroundTransparency = 1,
-							Size = UDim2.new(0.400000006, 0, 1, 0),
+							Size = UDim2.new(0.4, 0, 1, 0),
 							ZIndex = 2,
 							Font = Enum.Font.Gotham,
 							Text = "B:",
 							TextColor3 = themes.TextColor,
-							TextSize = 10.000
+							TextSize = 10
 						}),
 						utility:Create("TextBox", {
 							Name = "Textbox",
 							BackgroundTransparency = 1,
-							Position = UDim2.new(0.300000012, 0, 0, 0),
-							Size = UDim2.new(0.600000024, 0, 1, 0),
+							Position = UDim2.new(0.3, 0, 0, 0),
+							Size = UDim2.new(0.6, 0, 1, 0),
 							ZIndex = 2,
 							Font = Enum.Font.Gotham,
 							Text = "255",
 							TextColor3 = themes.TextColor,
-							TextSize = 10.000
+							TextSize = 10
 						})
 					}),
 				}),
@@ -1325,17 +1406,17 @@ do
 						Font = Enum.Font.Gotham,
 						Text = "Submit",
 						TextColor3 = themes.TextColor,
-						TextSize = 11.000
+						TextSize = 11
 					})
 				})
 			})
 		})
 
 		utility:DraggingEnabled(tab)
-		table.insert(self.modules, colorpicker)
-		--self:Resize()
+		local module = {Instance = colorpicker, Options = this}
+		self.modules[#self.modules + 1] = module
 
-		local allowed = {
+		const allowed = {
 			[""] = true
 		}
 
@@ -1347,7 +1428,6 @@ do
 
 		local draggingColor, draggingCanvas
 
-		local color3 = default or Color3.fromRGB(255, 255, 255)
 		local hue, sat, brightness = 0, 0, 1
 		local rgb = {
 			r = 255,
@@ -1363,30 +1443,31 @@ do
 			end
 		}
 
-		local callback = function(value)
-			if callback then
-				callback(value, function(...)
-					self:updateColorPicker(colorpicker, ...)
-				end)
-			end
-		end
-
 		utility:DraggingEnded(function()
 			draggingColor, draggingCanvas = false, false
 		end)
 
-		if default then
-			self:updateColorPicker(colorpicker, nil, default)
+		self:updateColorPicker(module)
 
-			hue, sat, brightness = Color3.toHSV(default)
-			default = Color3.fromHSV(hue, sat, brightness)
-
-			for i, prop in pairs({"r", "g", "b"}) do
-				rgb[prop] = default[prop:upper()] * 255
-			end
+		if typeof(this.default) == "table" then
+			this.default = Color3.fromHSV(table.unpack(this.default))
 		end
 
-		for i, container in pairs(tab.Container.Inputs:GetChildren()) do -- i know what you are about to say, so shut up
+		local function setColor(color)
+			this.default = color
+			this.color3 = color
+			hue, sat, brightness = Color3.toHSV(color)
+
+			rgb.r = color.R * 255
+			rgb.g = color.G * 255
+			rgb.b = color.B * 255
+
+			self:updateColorPicker(module)
+		end
+
+		setColor(this.default)
+
+		for i, container in tab.Container.Inputs:GetChildren() do
 			if container:IsA("ImageLabel") then
 				local textbox = container.Textbox
 				local focused
@@ -1405,17 +1486,15 @@ do
 
 				textbox:GetPropertyChangedSignal("Text"):Connect(function()
 					local text = textbox.Text
+					local number = tonumber(text)
 
-					if not allowed[text] and not tonumber(text) then
+					if not allowed[text] and not number then
 						textbox.Text = text:sub(1, #text - 1)
-					elseif focused and not allowed[text] then
-						rgb[container.Name:lower()] = math.clamp(tonumber(textbox.Text), 0, 255)
+					elseif focused and number then
+						rgb[container.Name:lower()] = math.clamp(number, 0, 255)
 
-						local color3 = Color3.fromRGB(rgb.r, rgb.g, rgb.b)
-						hue, sat, brightness = Color3.toHSV(color3)
-
-						self:updateColorPicker(colorpicker, nil, color3)
-						callback(color3)
+						setColor(Color3.fromRGB(rgb.r, rgb.g, rgb.b))
+						safeCall(this.callback, this.color3)
 					end
 				end)
 			end
@@ -1425,22 +1504,22 @@ do
 			draggingCanvas = true
 
 			while draggingCanvas do
-
 				local x, y = mouse.X, mouse.Y
 
 				sat = math.clamp((x - canvasPosition.X) / canvasSize.X, 0, 1)
 				brightness = 1 - math.clamp((y - canvasPosition.Y) / canvasSize.Y, 0, 1)
 
-				color3 = Color3.fromHSV(hue, sat, brightness)
+				this.color3 = Color3.fromHSV(hue, sat, brightness)
 
-				for i, prop in pairs({"r", "g", "b"}) do
-					rgb[prop] = color3[prop:upper()] * 255
+				for i, prop in {"r", "g", "b"} do
+					rgb[prop] = this.color3[prop:upper()] * 255
 				end
 
-				self:updateColorPicker(colorpicker, nil, {hue, sat, brightness}) -- roblox is literally retarded
-				utility:Tween(canvas.Cursor, {Position = UDim2.new(sat, 0, 1 - brightness, 0)}, 0.1) -- overwrite
+				this.default = Color3.fromHSV(hue, sat, brightness)
+				self:updateColorPicker(module)
+				utility:Tween(canvas.Cursor, {Position = UDim2.new(sat, 0, 1 - brightness, 0)}, 0.1)
 
-				callback(color3)
+				safeCall(this.callback, this.color3)
 				utility:Wait()
 			end
 		end)
@@ -1449,32 +1528,29 @@ do
 			draggingColor = true
 
 			while draggingColor do
-
 				hue = 1 - math.clamp(1 - ((mouse.X - colorPosition.X) / colorSize.X), 0, 1)
-				color3 = Color3.fromHSV(hue, sat, brightness)
+				this.color3 = Color3.fromHSV(hue, sat, brightness)
 
-				for i, prop in pairs({"r", "g", "b"}) do
-					rgb[prop] = color3[prop:upper()] * 255
+				for i, prop in {"r", "g", "b"} do
+					rgb[prop] = this.color3[prop:upper()] * 255
 				end
 
-				local x = hue -- hue is updated
-				self:updateColorPicker(colorpicker, nil, {hue, sat, brightness}) -- roblox is literally retarded
-				utility:Tween(tab.Container.Color.Select, {Position = UDim2.new(x, 0, 0, 0)}, 0.1) -- overwrite
+				const x = hue
+				this.default = Color3.fromHSV(hue, sat, brightness)
+				self:updateColorPicker(module)
+				utility:Tween(tab.Container.Color.Select, {Position = UDim2.new(x, 0, 0, 0)}, 0.1)
 
-				callback(color3)
+				safeCall(this.callback, this.color3)
 				utility:Wait()
 			end
 		end)
 
-		-- click events
 		local button = colorpicker.Button
 		local toggle, debounce, animate
 
-		lastColor = Color3.fromHSV(hue, sat, brightness)
+		local lastColor = Color3.fromHSV(hue, sat, brightness)
 		animate = function(visible, overwrite)
-
 			if overwrite then
-
 				if not toggle then
 					return
 				end
@@ -1498,7 +1574,6 @@ do
 			debounce = true
 
 			if visible then
-
 				if self.page.library.activePicker and self.page.library.activePicker ~= animate then
 					self.page.library.activePicker(nil, true)
 				end
@@ -1506,7 +1581,7 @@ do
 				self.page.library.activePicker = animate
 				lastColor = Color3.fromHSV(hue, sat, brightness)
 
-				local x1, x2 = button.AbsoluteSize.X / 2, 162--tab.AbsoluteSize.X
+				local x1, x2 = button.AbsoluteSize.X / 2, 162
 				local px, py = button.AbsolutePosition.X, button.AbsolutePosition.Y
 
 				tab.ClipsDescendants = true
@@ -1516,8 +1591,7 @@ do
 				tab.Position = UDim2.new(0, x1 + x2 + px, 0, py)
 				utility:Tween(tab, {Size = UDim2.new(0, 162, 0, 169)}, 0.2)
 
-				-- update size and position
-				wait(0.2)
+				task.wait(0.2)
 				tab.ClipsDescendants = false
 
 				canvasSize, canvasPosition = canvas.AbsoluteSize, canvas.AbsolutePosition
@@ -1526,7 +1600,7 @@ do
 				utility:Tween(tab, {Size = UDim2.new(0, 0, 0, 0)}, 0.2)
 				tab.ClipsDescendants = true
 
-				wait(0.2)
+				task.wait(0.2)
 				tab.Visible = false
 			end
 
@@ -1545,14 +1619,35 @@ do
 		end)
 
 		tab.Close.MouseButton1Click:Connect(function()
-			self:updateColorPicker(colorpicker, nil, lastColor)
+			setColor(lastColor)
+			safeCall(this.callback, this.color3)
 			animate()
 		end)
 
-		return colorpicker
+		function this:Update(dataOptions)
+			applyOptions(module.Options, dataOptions)
+
+			if typeof(this.default) == "table" then
+				this.default = Color3.fromHSV(table.unpack(this.default))
+			end
+
+			setColor(this.default)
+		end
+
+		return module
 	end
 
-	function section:addSlider(title, default, min, max, callback)
+	function section:addSlider(data)
+		data = data or {}
+		local this = {}
+		this.title = data.title
+		this.min = data.min or 0
+		this.default = data.default or this.min
+		this.max = data.max or 100
+		this.precision = data.precision or 0
+		this.value = this.default
+		this.callback = data.callback or function() end
+
 		local slider = utility:Create("ImageButton", {
 			Name = "Slider",
 			Parent = self.container,
@@ -1573,10 +1668,10 @@ do
 				Size = UDim2.new(0.5, 0, 0, 16),
 				ZIndex = 3,
 				Font = Enum.Font.Gotham,
-				Text = title,
+				Text = data.title,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
-				TextTransparency = 0.10000000149012,
+				TextTransparency = 0.1,
 				TextXAlignment = Enum.TextXAlignment.Left
 			}),
 			utility:Create("TextBox", {
@@ -1586,8 +1681,8 @@ do
 				Position = UDim2.new(1, -30, 0, 6),
 				Size = UDim2.new(0, 20, 0, 16),
 				ZIndex = 3,
-				Font = Enum.Font.GothamSemibold,
-				Text = default or min,
+				FontFace = gothamSemibold,
+				Text = this.default,
 				TextColor3 = themes.TextColor,
 				TextSize = 12,
 				TextXAlignment = Enum.TextXAlignment.Right
@@ -1626,7 +1721,7 @@ do
 							Name = "Circle",
 							AnchorPoint = Vector2.new(0.5, 0.5),
 							BackgroundTransparency = 1,
-							ImageTransparency = 1.000,
+							ImageTransparency = 1,
 							ImageColor3 = themes.TextColor,
 							Position = UDim2.new(1, 0, 0.5, 0),
 							Size = UDim2.new(0, 10, 0, 10),
@@ -1638,10 +1733,10 @@ do
 			})
 		})
 
-		table.insert(self.modules, slider)
-		--self:Resize()
+		local module = {Instance = slider, Options = this}
+		self.modules[#self.modules + 1] = module
 
-		local allowed = {
+		const allowed = {
 			[""] = true,
 			["-"] = true
 		}
@@ -1649,61 +1744,69 @@ do
 		local textbox = slider.TextBox
 		local circle = slider.Slider.Bar.Fill.Circle
 
-		local value = default or min
-		local dragging, last
+		local dragging
 
-		local callback = function(value)
-			if callback then
-				callback(value, function(...)
-					self:updateSlider(slider, ...)
-				end)
-			end
-		end
-
-		self:updateSlider(slider, nil, value, min, max)
+		self:updateSlider(module)
 
 		utility:DraggingEnded(function()
 			dragging = false
 		end)
 
-		slider.MouseButton1Down:Connect(function(input)
+		slider.MouseButton1Down:Connect(function()
 			dragging = true
 
 			while dragging do
 				utility:Tween(circle, {ImageTransparency = 0}, 0.1)
 
-				value = self:updateSlider(slider, nil, nil, min, max, value)
-				callback(value)
+				this.value = nil
+				this.value = self:updateSlider(module)
+				safeCall(this.callback, this.value)
 
 				utility:Wait()
 			end
 
-			wait(0.5)
+			task.wait(0.5)
 			utility:Tween(circle, {ImageTransparency = 1}, 0.2)
 		end)
 
 		textbox.FocusLost:Connect(function()
-			if not tonumber(textbox.Text) then
-				value = self:updateSlider(slider, nil, default or min, min, max)
-				callback(value)
-			end
+			this.value = self:updateSlider(module, this.value)
 		end)
 
 		textbox:GetPropertyChangedSignal("Text"):Connect(function()
-			local text = textbox.Text
+			if not textbox:IsFocused() then
+				return
+			end
 
-			if not allowed[text] and not tonumber(text) then
+			local text = textbox.Text
+			local number = tonumber(text)
+
+			if not allowed[text] and not number then
 				textbox.Text = text:sub(1, #text - 1)
-			elseif not allowed[text] then
-				value = self:updateSlider(slider, nil, tonumber(text) or value, min, max)
-				callback(value)
+			elseif number then
+				this.value = self:updateSlider(module, number)
+				safeCall(this.callback, this.value)
 			end
 		end)
 
-		return slider
+		function this:Update(dataOptions)
+			applyOptions(module.Options, dataOptions)
+
+			return section:updateSlider(module)
+		end
+
+		return module
 	end
 
-	function section:addDropdown(title, list, default, callback)
+	function section:addDropdown(data)
+		data = data or {}
+		local this = {}
+		this.list = data.list or {}
+		this.backuplist = this.list
+		this.title = data.title or "nil title"
+		this.default = data.default
+		this.callback = data.callback or function() end
+
 		local dropdown = utility:Create("Frame", {
 			Name = "Dropdown",
 			Parent = self.container,
@@ -1735,10 +1838,10 @@ do
 					Size = UDim2.new(1, -42, 1, 0),
 					ZIndex = 3,
 					Font = Enum.Font.Gotham,
-					Text = title,
+					Text = this.title,
 					TextColor3 = themes.TextColor,
 					TextSize = 12,
-					TextTransparency = 0.10000000149012,
+					TextTransparency = 0.1,
 					TextXAlignment = Enum.TextXAlignment.Left
 				}),
 				utility:Create("ImageButton", {
@@ -1785,26 +1888,30 @@ do
 			})
 		})
 
-		table.insert(self.modules, dropdown)
-		--self:Resize()
+		local module = {Instance = dropdown, Options = this}
+		self.modules[#self.modules + 1] = module
 
-		local this = {}
 		local search = dropdown.Search
 		local focused
 
-		list = list or {}
+		for i, v in this.list do
+			this.list[i] = tostring(v)
+		end
 
 		search.Button.MouseButton1Click:Connect(function()
 			if search.Button.Rotation == 0 then
-				self:updateDropdown(dropdown, nil, list, callback)
+				this.title = nil
+				self:updateDropdown(module)
 			else
-				self:updateDropdown(dropdown, nil, nil, callback)
+				this.title = nil
+				self:updateDropdown(module, {update = {}})
 			end
 		end)
 
 		search.TextBox.Focused:Connect(function()
 			if search.Button.Rotation == 0 then
-				self:updateDropdown(dropdown, nil, list, callback)
+				this.title = nil
+				self:updateDropdown(module, {update = {}})
 			end
 
 			focused = true
@@ -1816,10 +1923,11 @@ do
 
 		search.TextBox:GetPropertyChangedSignal("Text"):Connect(function()
 			if focused then
-				local list = utility:Sort(search.TextBox.Text, list)
-				list = #list ~= 0 and list
+				local sorted = utility:Sort(search.TextBox.Text, this.list)
+				local list = #sorted ~= 0 and sorted
 
-				self:updateDropdown(dropdown, nil, list, callback)
+				this.title = nil
+				self:updateDropdown(module, {update = list})
 			end
 		end)
 
@@ -1827,101 +1935,107 @@ do
 			self:Resize()
 		end)
 
-		if (default) then
-			search.TextBox.Text = default
-		end
-		
-		function this:Get()
-			return search.TextBox.Text
-		end
+		function this:Update(dataOptions)
+			dataOptions = dataOptions or {}
 
-		local _self = self
-		function this:updateDropdown(title, list, callback)
-			return _self:updateDropdown(dropdown, title, list, callback)
-		end
-
-		return setmetatable({}, {
-			__index = function(t, k)
-				return this[k] or dropdown[k]
+			if dataOptions.list then
+				for a, x in dataOptions.list do
+					dataOptions.list[a] = tostring(x)
+				end
 			end
-		})
+
+			applyOptions(module.Options, dataOptions)
+
+			if dataOptions.title ~= nil then
+				module.Options.title = tostring(dataOptions.title)
+			end
+
+			return section:updateDropdown(module, {noOpen = true})
+		end
+
+		if this.default then
+			this:Update({
+				title = this.default
+			})
+		end
+
+		return module
 	end
 
-	-- class functions
+	function library:SelectPage(data)
+		local selectedPage = data.page
+		local toggle = data.toggle
 
-	function library:SelectPage(page, toggle)
-
-		if toggle and self.focusedPage == page then -- already selected
+		if toggle and self.focusedPage == selectedPage then
 			return
 		end
 
-		local button = page.button
+		local button = selectedPage.button
 
 		if toggle then
-			-- page button
 			button.Title.TextTransparency = 0
-			button.Title.Font = Enum.Font.GothamSemibold
+			button.Title.FontFace = gothamSemibold
 
 			if button:FindFirstChild("Icon") then
 				button.Icon.ImageTransparency = 0
 			end
 
-			-- update selected page
 			local focusedPage = self.focusedPage
-			self.focusedPage = page
+			self.focusedPage = selectedPage
 
 			if focusedPage then
-				self:SelectPage(focusedPage)
+				self:SelectPage({
+					page = focusedPage
+				})
 			end
 
-			-- sections
 			local existingSections = focusedPage and #focusedPage.sections or 0
-			local sectionsRequired = #page.sections - existingSections
+			local sectionsRequired = #selectedPage.sections - existingSections
 
-			page:Resize()
+			selectedPage:Resize()
 
-			for i, section in pairs(page.sections) do
-				section.container.Parent.ImageTransparency = 0
+			for i = 1, #selectedPage.sections do
+				local pageSection = selectedPage.sections[i]
+				pageSection.container.Parent.ImageTransparency = 0
 			end
 
-			if sectionsRequired < 0 then -- "hides" some sections
-				for i = existingSections, #page.sections + 1, -1 do
-					local section = focusedPage.sections[i].container.Parent
+			if sectionsRequired < 0 then
+				for i = existingSections, #selectedPage.sections + 1, -1 do
+					local pageSection = focusedPage.sections[i].container.Parent
 
-					utility:Tween(section, {ImageTransparency = 1}, 0.1)
+					utility:Tween(pageSection, {ImageTransparency = 1}, 0.1)
 				end
 			end
 
-			wait(0.1)
-			page.container.Visible = true
+			task.wait(0.1)
+			selectedPage.container.Visible = true
 
 			if focusedPage then
 				focusedPage.container.Visible = false
 			end
 
-			if sectionsRequired > 0 then -- "creates" more section
-				for i = existingSections + 1, #page.sections do
-					local section = page.sections[i].container.Parent
+			if sectionsRequired > 0 then
+				for i = existingSections + 1, #selectedPage.sections do
+					local pageSection = selectedPage.sections[i].container.Parent
 
-					section.ImageTransparency = 1
-					utility:Tween(section, {ImageTransparency = 0}, 0.05)
+					pageSection.ImageTransparency = 1
+					utility:Tween(pageSection, {ImageTransparency = 0}, 0.05)
 				end
 			end
 
-			wait(0.05)
+			task.wait(0.05)
 
-			for i, section in pairs(page.sections) do
+			for i = 1, #selectedPage.sections do
+				local pageSection = selectedPage.sections[i]
+				utility:Tween(pageSection.container.Title, {TextTransparency = 0}, 0.1)
+				pageSection:Resize(true)
 
-				utility:Tween(section.container.Title, {TextTransparency = 0}, 0.1)
-				section:Resize(true)
-
-				wait(0.05)
+				task.wait(0.05)
 			end
 
-			wait(0.05)
-			page:Resize(true)
+			task.wait(0.05)
+			selectedPage:Resize(true)
 		else
-			-- page button
 			button.Title.Font = Enum.Font.Gotham
 			button.Title.TextTransparency = 0.65
 
@@ -1929,29 +2043,30 @@ do
 				button.Icon.ImageTransparency = 0.65
 			end
 
-			-- sections
-			for i, section in pairs(page.sections) do
-				utility:Tween(section.container.Parent, {Size = UDim2.new(1, -10, 0, 28)}, 0.1)
-				utility:Tween(section.container.Title, {TextTransparency = 1}, 0.1)
+			for i = 1, #selectedPage.sections do
+				local pageSection = selectedPage.sections[i]
+				utility:Tween(pageSection.container.Parent, {Size = UDim2.new(1, -10, 0, 28)}, 0.1)
+				utility:Tween(pageSection.container.Title, {TextTransparency = 1}, 0.1)
 			end
 
-			wait(0.1)
+			task.wait(0.1)
 
-			page.lastPosition = page.container.CanvasPosition.Y
-			page:Resize()
+			selectedPage.lastPosition = selectedPage.container.CanvasPosition.Y
+			selectedPage:Resize()
 		end
 	end
 
 	function page:Resize(scroll)
-		local padding = 10
+		const padding = 10
 		local size = 0
 
-		for i, section in pairs(self.sections) do
-			size = size + section.container.Parent.AbsoluteSize.Y + padding
+		for i = 1, #self.sections do
+			local pageSection = self.sections[i]
+			size = size + pageSection.container.Parent.AbsoluteSize.Y + padding
 		end
 
 		self.container.CanvasSize = UDim2.new(0, 0, 0, size)
-		self.container.ScrollBarImageTransparency = size > self.container.AbsoluteSize.Y
+		self.container.ScrollBarImageTransparency = size > self.container.AbsoluteSize.Y and 0 or 1
 
 		if scroll then
 			utility:Tween(self.container, {CanvasPosition = Vector2.new(0, self.lastPosition or 0)}, 0.2)
@@ -1959,16 +2074,15 @@ do
 	end
 
 	function section:Resize(smooth)
-
 		if self.page.library.focusedPage ~= self.page then
 			return
 		end
 
-		local padding = 4
-		local size = (4 * padding) + self.container.Title.AbsoluteSize.Y -- offset
+		const padding = 4
+		local size = (4 * padding) + self.container.Title.AbsoluteSize.Y
 
-		for i, module in pairs(self.modules) do
-			size = size + module.AbsoluteSize.Y + padding
+		for i, module in self.modules do
+			size = size + module.Instance.AbsoluteSize.Y + padding
 		end
 
 		if smooth then
@@ -1980,110 +2094,97 @@ do
 	end
 
 	function section:getModule(info)
+		for i = 1, #self.modules do
+			local module = self.modules[i]
+			local object = module.Instance
 
-		if table.find(self.modules, info) then
-			return info
-		end
-
-		for i, module in pairs(self.modules) do
-			if (module:FindFirstChild("Title") or module:FindFirstChild("TextBox", true)).Text == info then
+			if (object:FindFirstChild("Title") or object:FindFirstChild("TextBox", true)).Text == info or object == info then
 				return module
 			end
 		end
 
-		error("No module found under "..tostring(info))
+		error("No module found under " .. tostring(info))
 	end
 
-	-- updates
-
-	function section:updateButton(button, title)
-		button = self:getModule(button)
-
-		button.Title.Text = title
+	function section:updateButton(module)
+		module.Instance.Title.Text = module.Options.title
 	end
 
-	function section:updateToggle(toggle, title, value)
-		toggle = self:getModule(toggle)
+	function section:updateToggle(module)
+		local toggle = module.Instance
+		local options = module.Options
 
-		local position = {
+		const position = {
 			In = UDim2.new(0, 2, 0.5, -6),
 			Out = UDim2.new(0, 20, 0.5, -6)
 		}
 
 		local frame = toggle.Button.Frame
-		value = value and "Out" or "In"
+		local selectedPosition = options.toggled and "Out" or "In"
 
-		if title then
-			toggle.Title.Text = title
-		end
+		toggle.Title.Text = module.Options.title
 
 		utility:Tween(frame, {
 			Size = UDim2.new(1, -22, 1, -9),
-			Position = position[value] + UDim2.new(0, 0, 0, 2.5)
+			Position = position[selectedPosition] + UDim2.new(0, 0, 0, 2.5)
 		}, 0.2)
 
-		wait(0.1)
-		utility:Tween(frame, {
-			Size = UDim2.new(1, -22, 1, -4),
-			Position = position[value]
-		}, 0.1)
+		task.delay(0.1, function()
+			utility:Tween(frame, {
+				Size = UDim2.new(1, -22, 1, -4),
+				Position = position[selectedPosition]
+			}, 0.1)
+		end)
 	end
 
-	function section:updateTextbox(textbox, title, value)
-		textbox = self:getModule(textbox)
-
-		if title then
-			textbox.Title.Text = title
-		end
-
-		if value then
-			textbox.Button.Textbox.Text = value
-		end
-
+	function section:updateTextbox(module)
+		module.Instance.Title.Text = module.Options.title
+		module.Instance.Button.Textbox.Text = module.Options.default
 	end
 
-	function section:updateKeybind(keybind, title, key)
-		keybind = self:getModule(keybind)
+	function section:updateKeybind(module)
+		local keybind = module.Instance
+		local options = module.Options
+
+		if typeof(options.key) == "Instance" and options.key:IsA("InputObject") then
+			options.key = if options.key.UserInputType == Enum.UserInputType.Keyboard then options.key.KeyCode else options.key.UserInputType
+		end
 
 		local text = keybind.Button.Text
 		local bind = self.binds[keybind]
 
-		if title then
-			keybind.Title.Text = title
-		end
+		keybind.Title.Text = module.Options.title
 
 		if bind.connection then
 			bind.connection = bind.connection:UnBind()
 		end
 
-		if key then
-			self.binds[keybind].connection = utility:BindToKey(key, bind.callback)
-			text.Text = key.Name
+		if options.key ~= unknownKey then
+			self.binds[keybind].connection = utility:BindToKey(options.key, bind.callback, options.gameProcessedEvent)
+			text.Text = keyName(options.key)
 		else
-			text.Text = "None"
+			text.Text = "Unknown"
 		end
 	end
 
-	function section:updateColorPicker(colorpicker, title, color)
-		colorpicker = self:getModule(colorpicker)
+	function section:updateColorPicker(module)
+		local colorpicker = module.Instance
+		local options = module.Options
 
 		local picker = self.colorpickers[colorpicker]
 		local tab = picker.tab
-		local callback = picker.callback
 
-		if title then
-			colorpicker.Title.Text = title
-			tab.Title.Text = title
-		end
+		colorpicker.Title.Text = options.title
+		tab.Title.Text = options.title
 
 		local color3
 		local hue, sat, brightness
 
-		if type(color) == "table" then -- roblox is literally retarded x2
-			hue, sat, brightness = unpack(color)
+		if typeof(options.default) == "table" then
+			hue, sat, brightness = table.unpack(options.default)
 			color3 = Color3.fromHSV(hue, sat, brightness)
 		else
-			color3 = color
+			color3 = options.default
 			hue, sat, brightness = Color3.toHSV(color3)
 		end
 
@@ -2091,63 +2192,88 @@ do
 		utility:Tween(tab.Container.Color.Select, {Position = UDim2.new(hue, 0, 0, 0)}, 0.1)
 
 		utility:Tween(tab.Container.Canvas, {ImageColor3 = Color3.fromHSV(hue, 1, 1)}, 0.5)
-		utility:Tween(tab.Container.Canvas.Cursor, {Position = UDim2.new(sat, 0, 1 - brightness)}, 0.5)
+		utility:Tween(tab.Container.Canvas.Cursor, {Position = UDim2.new(sat, 0, 1 - brightness, 0)}, 0.5)
 
-		for i, container in pairs(tab.Container.Inputs:GetChildren()) do
+		for i, container in tab.Container.Inputs:GetChildren() do
 			if container:IsA("ImageLabel") then
 				local value = math.clamp(color3[container.Name], 0, 1) * 255
 
 				container.Textbox.Text = math.floor(value)
-				--callback(container.Name:lower(), value)
 			end
 		end
 	end
 
-	function section:updateSlider(slider, title, value, min, max, lvalue)
-		slider = self:getModule(slider)
+	function section:updateSlider(module, typedValue)
+		local slider = module.Instance
+		local options = module.Options
 
-		if title then
-			slider.Title.Text = title
+		slider.Title.Text = options.title
+
+		if typedValue then
+			options.value = typedValue
 		end
 
 		local bar = slider.Slider.Bar
 		local percent = (mouse.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X
 
-		if value then -- support negative ranges
-			percent = (value - min) / (max - min)
+		if options.value then
+			percent = (options.value - options.min) / (options.max - options.min)
+		end
+
+		local function round(what, precision)
+			if precision == 0 then
+				return math.floor(what)
+			elseif precision == -1 then
+				return what
+			else
+				return math.floor(what * 10 ^ precision + 0.5) / 10 ^ precision
+			end
 		end
 
 		percent = math.clamp(percent, 0, 1)
-		value = value or math.floor(min + (max - min) * percent)
 
-		slider.TextBox.Text = value
+		if typedValue then
+			options.value = round(options.min + (options.max - options.min) * percent, options.precision)
+		else
+			options.value = options.value or round(options.min + (options.max - options.min) * percent, options.precision)
+		end
+
+		if typedValue == nil or not slider.TextBox:IsFocused() then
+			slider.TextBox.Text = tostring(options.value)
+		end
 		utility:Tween(bar.Fill, {Size = UDim2.new(percent, 0, 1, 0)}, 0.1)
 
-		if value ~= lvalue and slider.ImageTransparency == 0 then
+		if options.value ~= options.lvalue and slider.ImageTransparency == 0 then
 			utility:Pop(slider, 10)
 		end
 
-		return value
+		options.lvalue = options.value
+
+		return options.value
 	end
 
-	function section:updateDropdown(dropdown, title, list, callback)
-		dropdown = self:getModule(dropdown)
+	function section:updateDropdown(module, aOptions)
+		local dropdown = module.Instance
+		local options = module.Options
+		aOptions = aOptions or {}
 
-		if title then
-			dropdown.Search.TextBox.Text = title
+		if options.title then
+			dropdown.Search.TextBox.Text = options.title
 		end
 
 		local entries = 0
 
 		utility:Pop(dropdown.Search, 10)
 
-		for i, button in pairs(dropdown.List.Frame:GetChildren()) do
+		for i, button in dropdown.List.Frame:GetChildren() do
 			if button:IsA("ImageButton") then
 				button:Destroy()
 			end
 		end
 
-		for i, value in pairs(list or {}) do
+		local list = aOptions.update or options.list
+
+		for i, value in list do
 			local button = utility:Create("ImageButton", {
 				Parent = dropdown.List.Frame,
 				BackgroundTransparency = 1,
@@ -2168,19 +2294,16 @@ do
 					Text = value,
 					TextColor3 = themes.TextColor,
 					TextSize = 12,
-					TextXAlignment = "Left",
-					TextTransparency = 0.10000000149012
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTransparency = 0.1
 				})
 			})
 
 			button.MouseButton1Click:Connect(function()
-				if callback then
-					callback(value, function(...)
-						self:updateDropdown(dropdown, ...)
-					end)
-				end
+				safeCall(options.callback, value)
 
-				self:updateDropdown(dropdown, value, nil, callback)
+				options.title = value
+				self:updateDropdown(module, {update = {}})
 			end)
 
 			entries = entries + 1
@@ -2188,12 +2311,13 @@ do
 
 		local frame = dropdown.List.Frame
 
-		utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, (entries == 0 and 30) or math.clamp(entries, 0, 3) * 34 + 38)}, 0.3)
-		utility:Tween(dropdown.Search.Button, {Rotation = list and 180 or 0}, 0.3)
+		if not aOptions.noOpen then
+			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, (entries == 0 and 30) or math.clamp(entries, 0, 3) * 34 + 38)}, 0.3)
+			utility:Tween(dropdown.Search.Button, {Rotation = not aOptions.update and 180 or 0}, 0.3)
+		end
 
 		if entries > 3 then
-
-			for i, button in pairs(dropdown.List.Frame:GetChildren()) do
+			for i, button in dropdown.List.Frame:GetChildren() do
 				if button:IsA("ImageButton") then
 					button.Size = UDim2.new(1, -6, 0, 30)
 				end
@@ -2208,5 +2332,4 @@ do
 	end
 end
 
-print("dino and steffei was here :)")
 return library
