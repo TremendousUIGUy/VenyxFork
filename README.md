@@ -1,10 +1,7 @@
-# Venyx UI Library
+# Venyx UI Library (But It's Forked Now)
 
 ## Documentation
-[Go to the documentation here](https://stefanuk12.github.io/Venyx-UI-Library/)
-
-## Showcase
-[Watch the showcase here](https://venyx.wtf/medias/ipY1h0WVia.mp4)
+[Go to the documentation here, sure do hope it's still accurate!](https://stefanuk12.github.io/Venyx-UI-Library/)
 
 ## Features
 - Sleek, simple, and animated design
@@ -15,8 +12,5 @@
 
 
 ## Notes
-- Mouse events are not bindable
-- No error handling, following doc should be enough
-- Bugs exist, good luck fixing them
-- Ui objects are made so custom resizing can be easily implemented if wished
-- Didn't implement dropdown (and color pickers idk) callback correctly, feel free to fix the crashes
+- Bugs might exist.
+- Yeah they probably do.
