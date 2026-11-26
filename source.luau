@@ -2309,9 +2309,18 @@ do
 
 		local frame = dropdown.List.Frame
 
+		const isOpen = dropdown.Size.Y.Offset > 30
+		const targetHeight = if entries == 0 then 30 else math.clamp(entries, 0, 3) * 34 + 38
+
 		if not aOptions.noOpen then
-			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, (entries == 0 and 30) or math.clamp(entries, 0, 3) * 34 + 38)}, 0.3)
-			utility:Tween(dropdown.Search.Button, {Rotation = not aOptions.update and 180 or 0}, 0.3)
+			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, targetHeight)}, 0.3)
+			utility:Tween(dropdown.Search.Button, {Rotation = if aOptions.update then 0 else 180}, 0.3)
+		elseif isOpen then
+			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, targetHeight)}, 0.3)
+
+			if entries == 0 then
+				utility:Tween(dropdown.Search.Button, {Rotation = 0}, 0.3)
+			end
 		end
 
 		if entries > 3 then
