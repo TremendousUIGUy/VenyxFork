@@ -779,7 +779,7 @@ do
 			if debounce then
 				return
 			end
-
+			task.spawn(safeCall,this.callback)
 			utility:Pop(button, 10)
 
 			debounce = true
@@ -788,8 +788,6 @@ do
 
 			task.wait(0.2)
 			utility:Tween(button.Title, {TextSize = 12}, 0.2)
-
-			safeCall(this.callback)
 
 			debounce = false
 		end)
