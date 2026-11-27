@@ -1806,7 +1806,7 @@ do
 		this.callback = data.callback or function() end
 
 		local dropdown = utility:Create("ScrollingFrame", {
-			Name = "Frame",
+			Name = "ScrollingFrame",
 			Active = true,
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
