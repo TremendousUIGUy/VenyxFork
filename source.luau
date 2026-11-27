@@ -1805,19 +1805,12 @@ do
 		this.default = data.default
 		this.callback = data.callback or function() end
 
-		local dropdown = utility:Create("ScrollingFrame", {
-			Name = "ScrollingFrame",
-			Active = true,
+		local dropdown = utility:Create("Frame", {
+			Name = "Dropdown",
+			Parent = self.container,
 			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Position = UDim2.new(0, 4, 0, 4),
-			Size = UDim2.new(1, -8, 1, -8),
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			ScrollingDirection = Enum.ScrollingDirection.Y,
-			ZIndex = 2,
-			ScrollBarThickness = 3,
-			ScrollBarImageColor3 = themes.DarkContrast
+			Size = UDim2.new(1, 0, 0, 30),
+			ClipsDescendants = true
 		}, {
 			utility:Create("UIListLayout", {
 				SortOrder = Enum.SortOrder.LayoutOrder,
@@ -2266,26 +2259,24 @@ do
 			dropdown.Search.TextBox.Text = options.title
 		end
 
+		local entries = 0
+
 		utility:Pop(dropdown.Search, 10)
 
-		local frame = dropdown.List.Frame
-
-		for i, button in frame:GetChildren() do
+		for i, button in dropdown.List.Frame:GetChildren() do
 			if button:IsA("ImageButton") then
 				button:Destroy()
 			end
 		end
 
-		const list = aOptions.update or options.list
-		const entries = #list
-		const needsScroll = entries > 3
+		local list = aOptions.update or options.list
 
 		for i, value in list do
 			local button = utility:Create("ImageButton", {
-				Parent = frame,
+				Parent = dropdown.List.Frame,
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
-				Size = UDim2.new(1, if needsScroll then -6 else 0, 0, 30),
+				Size = UDim2.new(1, 0, 0, 30),
 				ZIndex = 2,
 				Image = "rbxassetid://5028857472",
 				ImageColor3 = themes.DarkContrast,
@@ -2312,20 +2303,39 @@ do
 				options.title = value
 				self:updateDropdown(module, {update = {}})
 			end)
+
+			entries = entries + 1
 		end
 
-		const openHeight = if entries == 0 then 30 else math.clamp(entries, 0, 3) * 34 + 38
+		local frame = dropdown.List.Frame
+
+		const isOpen = dropdown.Size.Y.Offset > 30
+		const targetHeight = if entries == 0 then 30 else math.clamp(entries, 0, 3) * 34 + 38
+
+		const isOpen = dropdown.Size.Y.Offset > 30
+		const openHeight = math.clamp(entries, 0, 3) * 34 + 38
+		const targetHeight = if entries == 0 then 30 else openHeight
 
 		if not aOptions.noOpen then
-			module.isOpen = aOptions.update == nil or entries > 0
-
-			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, if module.isOpen then openHeight else 30)}, 0.3)
+			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, targetHeight)}, 0.3)
 			utility:Tween(dropdown.Search.Button, {Rotation = if aOptions.update then 0 else 180}, 0.3)
-		elseif module.isOpen then
+		elseif isOpen then
 			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, openHeight)}, 0.3)
 		end
 
-		frame.ScrollBarImageTransparency = if needsScroll then 0 else 1
+		if entries > 3 then
+			for i, button in dropdown.List.Frame:GetChildren() do
+				if button:IsA("ImageButton") then
+					button.Size = UDim2.new(1, -6, 0, 30)
+				end
+			end
+
+			frame.CanvasSize = UDim2.new(0, 0, 0, (entries * 34) - 4)
+			frame.ScrollBarImageTransparency = 0
+		else
+			frame.CanvasSize = UDim2.new(0, 0, 0, 0)
+			frame.ScrollBarImageTransparency = 1
+		end
 	end
 end
 
