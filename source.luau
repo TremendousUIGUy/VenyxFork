@@ -1806,11 +1806,18 @@ do
 		this.callback = data.callback or function() end
 
 		local dropdown = utility:Create("Frame", {
-			Name = "Dropdown",
-			Parent = self.container,
+			Name = "Frame",
+			Active = true,
 			BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, 30),
-			ClipsDescendants = true
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 4, 0, 4),
+			Size = UDim2.new(1, -8, 1, -8),
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			ZIndex = 2,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = themes.DarkContrast
 		}, {
 			utility:Create("UIListLayout", {
 				SortOrder = Enum.SortOrder.LayoutOrder,
@@ -2259,24 +2266,26 @@ do
 			dropdown.Search.TextBox.Text = options.title
 		end
 
-		local entries = 0
-
 		utility:Pop(dropdown.Search, 10)
 
-		for i, button in dropdown.List.Frame:GetChildren() do
+		local frame = dropdown.List.Frame
+
+		for i, button in frame:GetChildren() do
 			if button:IsA("ImageButton") then
 				button:Destroy()
 			end
 		end
 
-		local list = aOptions.update or options.list
+		const list = aOptions.update or options.list
+		const entries = #list
+		const needsScroll = entries > 3
 
 		for i, value in list do
 			local button = utility:Create("ImageButton", {
-				Parent = dropdown.List.Frame,
+				Parent = frame,
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
-				Size = UDim2.new(1, 0, 0, 30),
+				Size = UDim2.new(1, if needsScroll then -6 else 0, 0, 30),
 				ZIndex = 2,
 				Image = "rbxassetid://5028857472",
 				ImageColor3 = themes.DarkContrast,
@@ -2303,11 +2312,7 @@ do
 				options.title = value
 				self:updateDropdown(module, {update = {}})
 			end)
-
-			entries = entries + 1
 		end
-
-		local frame = dropdown.List.Frame
 
 		const openHeight = if entries == 0 then 30 else math.clamp(entries, 0, 3) * 34 + 38
 
@@ -2319,6 +2324,8 @@ do
 		elseif module.isOpen then
 			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, openHeight)}, 0.3)
 		end
+
+		frame.ScrollBarImageTransparency = if needsScroll then 0 else 1
 	end
 end
 
