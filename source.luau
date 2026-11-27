@@ -2309,32 +2309,15 @@ do
 
 		local frame = dropdown.List.Frame
 
-		const isOpen = dropdown.Size.Y.Offset > 30
-		const targetHeight = if entries == 0 then 30 else math.clamp(entries, 0, 3) * 34 + 38
-
-		const isOpen = dropdown.Size.Y.Offset > 30
-		const openHeight = math.clamp(entries, 0, 3) * 34 + 38
-		const targetHeight = if entries == 0 then 30 else openHeight
+		const openHeight = if entries == 0 then 30 else math.clamp(entries, 0, 3) * 34 + 38
 
 		if not aOptions.noOpen then
-			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, targetHeight)}, 0.3)
+			module.isOpen = aOptions.update == nil or entries > 0
+
+			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, if module.isOpen then openHeight else 30)}, 0.3)
 			utility:Tween(dropdown.Search.Button, {Rotation = if aOptions.update then 0 else 180}, 0.3)
-		elseif isOpen then
+		elseif module.isOpen then
 			utility:Tween(dropdown, {Size = UDim2.new(1, 0, 0, openHeight)}, 0.3)
-		end
-
-		if entries > 3 then
-			for i, button in dropdown.List.Frame:GetChildren() do
-				if button:IsA("ImageButton") then
-					button.Size = UDim2.new(1, -6, 0, 30)
-				end
-			end
-
-			frame.CanvasSize = UDim2.new(0, 0, 0, (entries * 34) - 4)
-			frame.ScrollBarImageTransparency = 0
-		else
-			frame.CanvasSize = UDim2.new(0, 0, 0, 0)
-			frame.ScrollBarImageTransparency = 1
 		end
 	end
 end
